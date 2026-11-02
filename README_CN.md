@@ -64,6 +64,14 @@ curl http://localhost:8083/v1/chat/completions \
 ## 限流（匿名模式）
 单出口并发 5 / RPM 30 / RPH 80，超了返回 429。agent 狂刷请放慢节奏，或往面板导入 cookie 提额。
 
+## 本地数据面板（额度监控）
+双击 `dashboard.html` 即可打开一个零依赖的本地看板，实时显示：
+- 并发 / RPM / RPH 用量卡（带红黄预警与「剩余次数」提示）
+- 近 24h KPI（请求数、成功率、平均延迟、输入/输出 token）及按模型拆分
+- 浏览器本地留存的用量趋势图（RPH / RPM / 并发三条线）
+
+数据来自 `/admin/api/usage` 与 `/admin/api/stats`。注意：这些是**代理本地护栏**（防出口 IP 被 Google 拉黑），并非 Google 官方配额；Google 对匿名网页端的真实隐形限额此处看不到。
+
 ## ⚠️ 免责声明
 逆向网页协议，仅限个人学习 / 自用，请勿用于生产流量，遵守 Google 服务条款。
 

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini 反代 · 额度看板</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1f2329; --sub:#8a9099;
+    --line:#e6e8ec; --green:#2bb673; --yellow:#f0a020; --red:#e5484d;
+    --blue:#3b82f6; --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#16181d; --card:#1e2128; --ink:#e8eaed; --sub:#8b929c;
+      --line:#2a2e37; --green:#3fb950; --yellow:#e3a008; --red:#f85149;
+      --blue:#58a6ff; --shadow:0 1px 3px rgba(0,0,0,.3);
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+    background:var(--bg);color:var(--ink);padding:18px;font-size:14px;line-height:1.5}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+  h1{font-size:18px;font-weight:600}
+  .status{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--sub)}
+  .dot.on{background:var(--green)} .dot.off{background:var(--red)}
+  .cfg{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .cfg input{background:var(--card);border:1px solid var(--line);color:var(--ink);
+    border-radius:6px;padding:5px 8px;font-size:12px;width:170px}
+  .cfg button{background:var(--blue);color:#fff;border:none;border-radius:6px;
+    padding:5px 12px;font-size:12px;cursor:pointer}
+  .cfg label{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--sub);cursor:pointer}
+  .grid{display:grid;gap:12px}
+  .row3{grid-template-columns:repeat(3,1fr)}
+  .row2{grid-template-columns:2fr 1fr}
+  @media(max-width:720px){.row3,.row2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;box-shadow:var(--shadow)}
+  .card h2{font-size:12px;font-weight:600;color:var(--sub);margin-bottom:10px;
+    text-transform:uppercase;letter-spacing:.04em}
+  .big{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+  .big small{font-size:15px;color:var(--sub);font-weight:500}
+  .bar{height:7px;border-radius:4px;background:var(--line);margin-top:10px;overflow:hidden}
+  .bar>i{display:block;height:100%;border-radius:4px;background:var(--green);transition:width .4s,background .4s}
+  .warn{font-size:12px;margin-top:7px;color:var(--sub)}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{text-align:center}
+  .kpi b{display:block;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11px;color:var(--sub)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--sub);font-weight:600;font-size:12px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px}
+  .pill.ok{background:rgba(43,182,115,.14);color:var(--green)}
+  .pill.err{background:rgba(229,72,77,.14);color:var(--red)}
+  canvas{width:100%;height:180px;display:block}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--sub);margin-top:6px}
+  .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:4px;vertical-align:middle}
+  footer{color:var(--sub);font-size:11px;margin-top:14px;line-height:1.7}
+  code{background:var(--line);padding:1px 5px;border-radius:4px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Gemini 反代 · 额度看板</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中…</span>
+      <span id="ver"></span></div>
+    <div class="cfg">
+      <input id="base" value="http://localhost:8083" title="反代服务地址">
+      <input id="token" value="admin123" title="admin token">
+      <label><input type="checkbox" id="auto" checked> 自动刷新 3s</label>
+      <button id="refresh">刷新</button>
+    </div>
+  </header>
+
+  <div class="grid row3" style="margin-bottom:12px">
+    <div class="card"><h2>并发 Concurrent</h2>
+      <div class="big"><span id="uInflight">–</span><small> / <span id="uConc">5</span></small></div>
+      <div class="bar"><i id="barConc"></i></div>
+      <div class="warn" id="wConc"></div></div>
+    <div class="card"><h2>每分钟 RPM</h2>
+      <div class="big"><span id="uRpm">–</span><small> / <span id="uRpmMax">30</span></small></div>
+      <div class="bar"><i id="barRpm"></i></div>
+      <div class="warn" id="wRpm"></div></div>
+    <div class="card"><h2>每小时 RPH</h2>
+      <div class="big"><span id="uRph">–</span><small> / <span id="uRphMax">80</span></small></div>
+      <div class="bar"><i id="barRph"></i></div>
+      <div class="warn" id="wRph"></div></div>
+  </div>
+
+  <div class="grid row2" style="margin-bottom:12px">
+    <div class="card">
+      <h2>近 24 小时 KPI</h2>
+      <div class="kpis">
+        <div class="kpi"><b id="kReq">–</b><span>总请求</span></div>
+        <div class="kpi"><b id="kRate">–</b><span>成功率</span></div>
+        <div class="kpi"><b id="kLat">–</b><span>平均延迟</span></div>
+        <div class="kpi"><b id="kIn">–</b><span>输入 token</span></div>
+        <div class="kpi"><b id="kOut">–</b><span>输出 token</span></div>
+      </div>
+      <table id="modelTbl" style="margin-top:12px"></table>
+    </div>
+    <div class="card">
+      <h2>实时趋势（本地留存）</h2>
+      <canvas id="chart"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--blue)"></i>RPH</span>
+        <span><i style="background:var(--green)"></i>RPM</span>
+        <span><i style="background:var(--yellow)"></i>并发</span>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    数据来自本地反代 <code>/admin/api/usage</code> 与 <code>/admin/api/stats</code>，是<b>代理本地护栏</b>（防出口 IP 被 Google 拉黑），并非 Google 官方配额；Google 对匿名网页端的真实隐形限额此处看不到。<br>
+    需保持反代服务（默认 8083）与本地代理（如 Clash 7897）常开。趋势图存于浏览器本地，清缓存即清空。
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const baseEl=$('base'), tokenEl=$('token'), autoEl=$('auto');
+const HIST_KEY='gemini_dash_history';
+let timer=null, history=loadHist();
+
+function loadHist(){try{return JSON.parse(localStorage.getItem(HIST_KEY))||[]}catch(e){return[]}}
+function saveHist(){try{localStorage.setItem(HIST_KEY,JSON.stringify(history.slice(-120)))}catch(e){}}
+
+function setBar(barId,warnId,cur,max){
+  const pct=Math.min(100,Math.round(cur/max*100));
+  const bar=$(barId); bar.style.width=pct+'%';
+  let color=getComputedStyle(document.documentElement).getPropertyValue('--green');
+  let msg='';
+  if(pct>=100){color=getComputedStyle(document.documentElement).getPropertyValue('--red');
+    msg='⚠ 已达红线，随时可能被拦 (429)';}
+  else if(pct>=75){color=getComputedStyle(document.documentElement).getPropertyValue('--yellow');
+    const left=Math.max(0,Math.floor(max-cur));
+    msg='接近红线，本周期只剩约 '+left+' 次';}
+  else{const left=Math.max(0,Math.floor(max-cur));msg='余量充足，剩约 '+left+' 次';}
+  bar.style.background=color.trim();
+  $(warnId).textContent=msg;
+}
+
+function fmt(n){return (n==null?'–':n.toLocaleString('zh-CN'))}
+function fmtMs(n){return n==null?'–':(n/1000).toFixed(1)+'s'}
+
+async function tick(){
+  const base=baseEl.value.trim().replace(/\/+$/,'');
+  const tk=encodeURIComponent(tokenEl.value.trim());
+  try{
+    const [uRes,sRes]=await Promise.all([
+      fetch(`${base}/admin/api/usage?token=${tk}`),
+      fetch(`${base}/admin/api/stats?hours=24&token=${tk}`)
+    ]);
+    if(!uRes.ok||!sRes.ok) throw new Error('HTTP '+uRes.status+'/'+sRes.status);
+    const u=await uRes.json(), s=await sRes.json();
+    $('dot').className='dot on'; $('statusText').textContent='在线 · '+new Date().toLocaleTimeString('zh-CN');
+    // 取第一个 slot（单代理时即启动参数）
+    const slot=(u.items&&u.items[0])||{};
+    $('uInflight').textContent=slot.inflight??'–';
+    $('uRpm').textContent=slot.rpm??'–';
+    $('uRph').textContent=slot.rph??'–';
+    $('uConc').textContent=slot.limit_concurrent??5;
+    $('uRpmMax').textContent=slot.limit_rpm??30;
+    $('uRphMax').textContent=slot.limit_rph??80;
+    setBar('barConc','wConc',slot.inflight||0,slot.limit_concurrent||5);
+    setBar('barRpm','wRpm',slot.rpm||0,slot.limit_rpm||30);
+    setBar('barRph','wRph',slot.rph||0,slot.limit_rph||80);
+    // KPI
+    $('kReq').textContent=fmt(s.total_requests);
+    $('kRate').textContent=(s.success_rate!=null?(s.success_rate*100).toFixed(0):'–')+'%';
+    $('kLat').textContent=fmtMs(s.avg_ms);
+    $('kIn').textContent=fmt(s.prompt_tokens);
+    $('kOut').textContent=fmt(s.output_tokens);
+    // 模型表
+    let rows='<tr><th>模型</th><th class="num">请求</th><th class="num">成功</th><th class="num">延迟</th><th class="num">出 token</th></tr>';
+    (s.by_model||[]).forEach(m=>{
+      rows+=`<tr><td>${m.model}</td><td class="num">${m.requests}</td>`+
+        `<td class="num"><span class="pill ${m.success===m.requests?'ok':'err'}">${m.success}</span></td>`+
+        `<td class="num">${fmtMs(m.avg_ms)}</td><td class="num">${fmt(m.output_tokens)}</td></tr>`;
+    });
+    $('modelTbl').innerHTML=rows;
+    // 历史
+    history.push({t:Date.now(),rph:slot.rph||0,rpm:slot.rpm||0,inf:slot.inflight||0});
+    if(history.length>120)history.shift(); saveHist();
+    drawChart();
+  }catch(e){
+    $('dot').className='dot off'; $('statusText').textContent='离线 · '+e.message;
+  }
+}
+
+function drawChart(){
+  const c=$('chart'), dpr=window.devicePixelRatio||1;
+  const w=c.clientWidth, h=c.clientHeight;
+  c.width=w*dpr; c.height=h*dpr;
+  const ctx=c.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  if(history.length<2){ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--sub');
+    ctx.font='12px sans-serif';ctx.fillText('采样中…',10,h/2);return;}
+  const pad=6, maxV=Math.max(10,...history.map(p=>Math.max(p.rph,p.rpm,p.inf)));
+  const x=i=>pad+i*(w-2*pad)/(history.length-1);
+  const y=v=>h-pad-(v/maxV)*(h-2*pad);
+  // 网格
+  ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--line');
+  ctx.lineWidth=1;
+  for(let g=0;g<=2;g++){const gy=pad+g*(h-2*pad)/2;ctx.beginPath();ctx.moveTo(pad,gy);ctx.lineTo(w-pad,gy);ctx.stroke();}
+  const line=(key,color)=>{
+    ctx.strokeStyle=color;ctx.lineWidth=1.6;ctx.beginPath();
+    history.forEach((p,i)=>{const px=x(i),py=y(p[key]);i?ctx.lineTo(px,py):ctx.moveTo(px,py);});
+    ctx.stroke();
+  };
+  line('rph',getComputedStyle(document.documentElement).getPropertyValue('--blue').trim());
+  line('rpm',getComputedStyle(document.documentElement).getPropertyValue('--green').trim());
+  line('inf',getComputedStyle(document.documentElement).getPropertyValue('--yellow').trim());
+  ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--sub');
+  ctx.font='10px sans-serif';ctx.fillText('峰值 '+maxV,pad,12);
+}
+
+function startLoop(){if(timer)clearInterval(timer);
+  if(autoEl.checked){tick();timer=setInterval(tick,3000);}else{tick();}}
+autoEl.addEventListener('change',startLoop);
+$('refresh').addEventListener('click',tick);
+baseEl.addEventListener('change',startLoop);
+tokenEl.addEventListener('change',startLoop);
+startLoop();
+</script>
+</body>
+</html>
