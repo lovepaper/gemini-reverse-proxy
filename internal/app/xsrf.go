@@ -26,7 +26,17 @@ import (
 var (
 	xsrfMu    sync.Mutex
 	xsrfCache = map[string]xsrfEntry{}
+	// xsrfInflight 去重同 key 的并发抓取：TTL 过期瞬间（或轮转作废后），同一账号的
+	// 所有并发请求会同时发现缓存失效，没有去重的话每个都各自抓一遍几百 KB 的 /app
+	// 页面。同 key 只放一个 goroutine 真正发请求，其余等结果（bl.go 的 refreshBL 同思路）。
+	xsrfInflight = map[string]*xsrfCall{}
 )
+
+type xsrfCall struct {
+	done  chan struct{}
+	entry xsrfEntry
+	err   error
+}
 
 type xsrfEntry struct {
 	token   string
@@ -83,6 +93,32 @@ func invalidateXSRF(cookie string) {
 	xsrfMu.Unlock()
 }
 
+// fetchXSRFEntry 抓一次 /app tokens 并写缓存；同 key 的并发调用合并成一次真实请求。
+// 失败不写缓存（保持原行为），但等待者同样拿到这个错误，不用各自再撞一遍墙。
+func fetchXSRFEntry(key, cookie string, authuser int, proxyURL string) (xsrfEntry, error) {
+	xsrfMu.Lock()
+	if c, ok := xsrfInflight[key]; ok {
+		xsrfMu.Unlock()
+		<-c.done
+		return c.entry, c.err
+	}
+	c := &xsrfCall{done: make(chan struct{})}
+	xsrfInflight[key] = c
+	xsrfMu.Unlock()
+
+	c.entry, c.err = fetchAppTokens(cookie, authuser, proxyURL)
+	if c.err == nil {
+		xsrfMu.Lock()
+		xsrfCache[key] = c.entry
+		xsrfMu.Unlock()
+	}
+	xsrfMu.Lock()
+	delete(xsrfInflight, key)
+	xsrfMu.Unlock()
+	close(c.done)
+	return c.entry, c.err
+}
+
 // getXSRF 取该 cookie（第 authuser 个号）对应的 XSRF token；命中缓存且没过期就直接返回。
 // cookie 为空（匿名）时返回空串——匿名请求不需要这个字段。
 func getXSRF(cookie string, authuser int, proxyURL string) (string, error) {
@@ -98,13 +134,10 @@ func getXSRF(cookie string, authuser int, proxyURL string) (string, error) {
 	}
 	xsrfMu.Unlock()
 
-	e, err := fetchAppTokens(cookie, authuser, proxyURL)
+	e, err := fetchXSRFEntry(key, cookie, authuser, proxyURL)
 	if err != nil {
 		return "", err
 	}
-	xsrfMu.Lock()
-	xsrfCache[key] = e
-	xsrfMu.Unlock()
 	return e.token, nil
 }
 
@@ -119,13 +152,10 @@ func getUploadTokens(cookie string, authuser int, proxyURL string) (pushID, pctx
 	}
 	xsrfMu.Unlock()
 
-	e, err := fetchAppTokens(cookie, authuser, proxyURL)
+	e, err := fetchXSRFEntry(key, cookie, authuser, proxyURL)
 	if err != nil {
 		return "", "", err
 	}
-	xsrfMu.Lock()
-	xsrfCache[key] = e
-	xsrfMu.Unlock()
 	return e.pushID, e.pctx, nil
 }
 

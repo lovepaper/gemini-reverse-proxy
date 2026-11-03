@@ -131,9 +131,13 @@ func accountInsert(label, cookie, note string) (int64, error) {
 	if cookie == "" {
 		return 0, fmt.Errorf("cookie 不能为空")
 	}
-	return insertID(
+	id, err := insertID(
 		`INSERT INTO accounts(label, cookie, status, note, created_at) VALUES (?,?,?,?,?)`,
 		strings.TrimSpace(label), cookie, "enabled", strings.TrimSpace(note), time.Now().Unix())
+	if err == nil {
+		invalidateHasCookieCache()
+	}
+	return id, err
 }
 
 // accountList 返回池里全部账号，按 id 升序。
@@ -177,6 +181,9 @@ func accountByID(id int64) *CookieAccount {
 // accountDelete 删除一条。
 func accountDelete(id int64) error {
 	_, err := getDB().Exec(`DELETE FROM accounts WHERE id=?`, id)
+	if err == nil {
+		invalidateHasCookieCache()
+	}
 	return err
 }
 
@@ -186,6 +193,9 @@ func accountSetStatus(id int64, status string) error {
 		return fmt.Errorf("非法状态 %q", status)
 	}
 	_, err := getDB().Exec(`UPDATE accounts SET status=? WHERE id=?`, status, id)
+	if err == nil {
+		invalidateHasCookieCache()
+	}
 	return err
 }
 
@@ -521,6 +531,7 @@ func autoDisableIfDead(id int64) {
 	}
 	if _, err := getDB().Exec(
 		`UPDATE accounts SET status='disabled' WHERE id=? AND status='enabled'`, id); err == nil {
+		invalidateHasCookieCache()
 		logf("[cookie] 账号 #%d 连续 %d 次鉴权失败，已自动停用", id, fails)
 	}
 }

@@ -2,6 +2,42 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## Unreleased
+
+### 新增
+
+- **官方 API 直连模式（学 CLIProxyAPI 的官方凭据池）**。`config.json` 配 `official_api_keys`
+  （或环境变量 `OFFICIAL_API_KEYS`，逗号分隔）后，`/v1/chat/completions` 请求优先走 Google
+  官方 OpenAI 兼容端点，key 原子 round-robin 轮询；官方失败（网络错 / 4xx / 5xx，流式未开始）
+  自动回落网页反代路径，客户端无感。配套开关：`official_models` 白名单（不配 = 所有模型都先试
+  官方）、`official_model_map` 模型名映射（表外透传）、`official_only`（官方失败直接报错不回落）、
+  `official_base_url`（默认官方端点）。没配 key 行为完全不变。见 internal/app/official.go 与
+  docs/COMPARISON.md。
+- **`/healthz` 健康检查端点**。给容器编排 / 反代上游健康探测用（distroless 镜像里没有 shell，
+  Dockerfile 的 HEALTHCHECK 不可用）。不带任何敏感信息。
+
+### 性能
+
+- **tiktoken 计数挪出请求线程**：`recordRequest` 的 prompt/response token 计数与写库一起
+  进后台 goroutine，长 prompt 下省毫秒~十毫秒级请求延迟。
+- **流式路径减少重复解析**：成功路径 `string(raw)` 复制从 4-6 次合并为 1 次；已吐过流式内容
+  时跳过 `hasContentFrame` 的全文逐行 JSON 重解析。单轮与多轮路径都改了。
+- **`hasCookie` 加 5s TTL 缓存**：账号增删 / 停用 / 自动停号时主动失效，admin 操作即时生效。
+  热路径上每请求最多 1 次库查询变成最多每 5 秒 1 次。
+- **匿名模型列表只构建一次**（sync.OnceValue），无 cookie 部署不再每请求重建过滤 map。
+- **XSRF 缓存过期惊群修复**：TTL 到期瞬间同账号并发请求合并为一次真实 `/app` 页面抓取
+  （inflight 去重），其余等结果。
+- **admin 面板静态资源启动预读**：不再每请求开 embed FS + 分配 buffer，顺带修掉 `f.Read`
+  忽略返回值的短读隐患。
+- 以上均为本地 CPU / 内存 / DB 层面优化，不改变发往上游的请求内容与频率（XSRF 去重还
+  减少了冗余页面抓取）。
+
+### 文档
+
+- **docs/RISK.md 风控梳理**：10 项风控特征分级清单、使用纪律、保号路线。
+- **docs/COMPARISON.md 生态学习报告**：8 个同类项目（Gemini / GPT / 通用网关）对比，
+  吸收了什么、有意不学什么、后续候选。
+
 ## 4.27.0
 
 ### 新增

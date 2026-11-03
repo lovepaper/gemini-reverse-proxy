@@ -68,6 +68,21 @@ type Config struct {
 	StrictModel bool `json:"strict_model"`
 	// 被降级的号在该模型上冷却多久（分钟），0 = 不记。网页端用量按 5 小时滚动窗算，默认 300。
 	StrictModelCooldownMin int `json:"strict_model_cooldown_min"`
+
+	// ─── 官方 API 直连（学 CLIProxyAPI / Gemini-Balance 的官方凭据池模式）───
+	// 官方 Gemini API key 池：配了就优先走官方 OpenAI 兼容端点（完全合规、不碰网页风控），
+	// 官方失败（网络错 / 4xx / 5xx，流式开始前）自动回落网页反代路径；没配 key 行为不变。
+	// 凭证按本项目惯例放 config.json / 环境变量，不进 RuntimeConfig（不进网页表单）。
+	OfficialAPIKeys []string `json:"official_api_keys"`
+	// 官方端点 base URL。默认官方 OpenAI 兼容端点，一般不用改。
+	OfficialBaseURL string `json:"official_base_url"`
+	// 只走官方：官方失败直接报错，不回落网页反代。默认 false（官方优先、失败回落）。
+	OfficialOnly bool `json:"official_only"`
+	// 允许走官方的客户端模型名白名单。空 = 所有请求都先试官方（官方不认的模型名会
+	// 404，白付一个 RTT 后回落网页——建议配上）。
+	OfficialModels []string `json:"official_models"`
+	// 模型名映射：本项目/客户端的模型名 → 官方 API 的模型名。映射表里没有的原名透传。
+	OfficialModelMap map[string]string `json:"official_model_map"`
 }
 
 var (
@@ -115,6 +130,12 @@ func defaultConfig() Config {
 		FirefoxFingerprint:     false,
 		StrictModel:            false,
 		StrictModelCooldownMin: 300,
+
+		OfficialAPIKeys:  nil,
+		OfficialBaseURL:  "https://generativelanguage.googleapis.com/v1beta/openai",
+		OfficialOnly:     false,
+		OfficialModels:   nil,
+		OfficialModelMap: nil,
 	}
 }
 

@@ -384,7 +384,9 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 				UpstreamModel: mde.Reported, TotalMs: time.Since(t0).Milliseconds(),
 				Emitted: tracker.emitted, EmittedReasoning: rtracker.emitted}, err
 		}
-		if err != nil || statusCode != 200 || !hasContentFrame(string(raw)) {
+		// 已吐过内容即证明有内容帧，跳过全文逐行重解析（见 gemini.go 同一处）。
+		if err != nil || statusCode != 200 ||
+			((tracker.emitted == "" && rtracker.emitted == "") && !hasContentFrame(string(raw))) {
 			if err == nil && statusCode == 200 {
 				lastErr = fmt.Errorf("续接无内容帧（会话可能已失效，raw %d 字节）", len(raw))
 			} else if err != nil {
@@ -404,7 +406,8 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 			continue
 		}
 		// 成功：回填续接状态。
-		cid, rid, rcid, tok26 := parseConvIDs(string(raw))
+		rawStr := string(raw) // 复制一次复用，见 gemini.go 同一处
+		cid, rid, rcid, tok26 := parseConvIDs(rawStr)
 		if cid != "" {
 			conv.cid = cid
 		}
@@ -422,9 +425,9 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		return &StreamResult{
 			Emitted:          tracker.emitted,
 			EmittedReasoning: rtracker.emitted,
-			Raw:              string(raw),
-			Reasoning:        extractReasoning(string(raw)),
-			UpstreamModel:    extractUpstreamModel(string(raw)),
+			Raw:              rawStr,
+			Reasoning:        extractReasoning(rawStr),
+			UpstreamModel:    extractUpstreamModel(rawStr),
 			ProxyID:          p.ID,
 			ProxyName:        p.Name,
 			AccountID:        conv.accountID,

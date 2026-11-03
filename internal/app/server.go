@@ -193,8 +193,6 @@ func recordRequest(endpoint, model, prompt, response string, res *StreamResult, 
 		Error:         errStr,
 		PromptChars:   len(prompt),
 		ResponseChars: len(response),
-		PromptTokens:  countTokens(prompt),
-		OutputTokens:  countTokens(response),
 		Endpoint:      endpoint,
 	}
 	if stream {
@@ -213,7 +211,14 @@ func recordRequest(endpoint, model, prompt, response string, res *StreamResult, 
 		}
 		r.AccountLabel = res.AccountLabel
 	}
-	go insertRequest(r)
+	// tiktoken 编码对长 prompt/response 是毫秒~十毫秒级开销，挪进后台 goroutine：
+	// 写库本来就是异步的，token 计数没必要占着请求线程（跟 buildUsage 的口径一致，
+	// 两边对同一文本各算一次，但只有这边在关键路径上）。
+	go func() {
+		r.PromptTokens = countTokens(prompt)
+		r.OutputTokens = countTokens(response)
+		insertRequest(r)
+	}()
 }
 
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +283,15 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	includeUsage := false
 	if so, ok := req["stream_options"].(map[string]interface{}); ok {
 		includeUsage, _ = so["include_usage"].(bool)
+	}
+
+	// 官方 API 直连（学 CLIProxyAPI 的官方凭据池模式）：配了 key 池且模型在白名单内
+	// 就先试官方端点 —— 完全合规、不碰网页风控。官方失败且还没写任何字节时，继续走
+	// 下面的网页反代路径，客户端无感。没配 key 这段直接跳过，行为不变。见 official.go。
+	if key, ok := pickOfficialKey(); ok && officialEligibleModel(modelInput) {
+		if tryOfficialUpstream(w, r, body, modelInput, key, stream, prompt) {
+			return
+		}
 	}
 
 	cid := "chatcmpl-" + randHex(12)

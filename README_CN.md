@@ -41,6 +41,22 @@ curl http://localhost:8083/v1/chat/completions \
 ```
 管理面板：`http://localhost:8083/admin`（token = admin123），可看请求日志、导入 Google cookie 解锁 pro / 思考 / 图像。
 
+## 官方 API 直连（可选,推荐的生产通道）
+
+在 `config.json` 配上官方 [AI Studio](https://aistudio.google.com) API key（或环境变量 `OFFICIAL_API_KEYS`,逗号分隔多把）：
+
+```json
+{
+  "official_api_keys": ["AIza..."],
+  "official_models": ["gemini-3.6-flash"],
+  "official_model_map": { "gemini-3.6-flash": "gemini-3-flash" }
+}
+```
+
+配好后这些模型的请求**优先走官方端点**（完全合规,不碰网页风控,不怕封号）,官方失败自动回落网页反代,客户端 base_url / key 不用改。官方模型名以 AI Studio 文档为准,用 `official_model_map` 对上;不配白名单时所有请求都会先试官方,官方不认的模型名会白付一个 RTT 才回落,建议配上。细节见 `docs/COMPARISON.md` 与 `docs/RISK.md`。
+
+健康探测:`GET /healthz` 返回 200 即进程存活,给容器编排用。
+
 ## 接入 WorkBuddy
 在 `C:\Users\<你>\.workbuddy\models.json` 加：
 ```json

@@ -72,6 +72,18 @@ func Run() {
 	if envTok := os.Getenv("ADMIN_TOKEN"); envTok != "" && cfg.AdminToken == "" {
 		cfg.AdminToken = envTok
 	}
+	// 官方 API key 池也认环境变量（docker-compose 里比挂 config.json 方便），
+	// 逗号分隔多把 key；config.json 已配时环境变量不覆盖。
+	if envKeys := os.Getenv("OFFICIAL_API_KEYS"); envKeys != "" && len(cfg.OfficialAPIKeys) == 0 {
+		for _, k := range strings.Split(envKeys, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				cfg.OfficialAPIKeys = append(cfg.OfficialAPIKeys, k)
+			}
+		}
+	}
+	if os.Getenv("OFFICIAL_ONLY") == "1" || strings.EqualFold(os.Getenv("OFFICIAL_ONLY"), "true") {
+		cfg.OfficialOnly = true
+	}
 
 	// boot DB and load proxy pool
 	getDB()
@@ -124,6 +136,12 @@ func Run() {
 	// MCP over HTTP（Streamable HTTP）：跟 OpenAI 接口同进程同端口，暴露 web_search。
 	// 用同一把 API key 鉴权，客户端配 Authorization: Bearer <key> 连这个 URL。
 	mux.HandleFunc("/mcp", requireAPIKey(handleMCPHTTP))
+	// 健康检查：探进程活着（能响应请求即活着；DB 初始化失败进程根本起不来）。
+	// 不带任何敏感信息。给容器编排 / 反代上游健康探测用（distroless 镜像里没有
+	// shell，Dockerfile 的 HEALTHCHECK 用不了，靠编排层探这个端点）。
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			handleRoot(w, r)
@@ -190,6 +208,14 @@ func Run() {
 	fmt.Printf("  Models:      %v\n", modelNames)
 	fmt.Printf("  Cookie:      %s\n", cookieStatus)
 	fmt.Printf("  Proxy:       %s\n", proxyStatus)
+	officialStatus := "none (web-only)"
+	if n := len(cfg.OfficialAPIKeys); n > 0 {
+		officialStatus = fmt.Sprintf("%d key(s), official-first", n)
+		if cfg.OfficialOnly {
+			officialStatus += " (official_only)"
+		}
+	}
+	fmt.Printf("  Official:    %s\n", officialStatus)
 	fmt.Printf("  Impersonate: %s\n", rtCfg().Impersonate)
 	tokInfo := "chars/4 (fallback)"
 	if tokenizerOK {

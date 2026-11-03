@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -154,9 +155,36 @@ var Models = map[string]ModelConfig{
 }
 
 // hasCookie 表示 cookie 池里有没有可用账号。决定 3.1 Pro 是否出现在模型列表里。
+//
+// 底下的 accountCount() 是一次 SELECT COUNT+SUM，而 hasCookie 走在每请求的热路径上
+// （resolveModel / rejectUnsupported 每个图片 part 各一次）。账号表的变更频率极低
+// （admin 面板增删改），短 TTL 缓存即可；要实时的地方（admin 接口）直接调 accountCount。
+var (
+	hasCookieMu  sync.Mutex
+	hasCookieVal bool
+	hasCookieAt  time.Time
+)
+
+const hasCookieTTL = 5 * time.Second
+
 func hasCookie() bool {
+	hasCookieMu.Lock()
+	defer hasCookieMu.Unlock()
+	if time.Since(hasCookieAt) < hasCookieTTL {
+		return hasCookieVal
+	}
 	_, enabled := accountCount()
-	return enabled > 0
+	hasCookieVal = enabled > 0
+	hasCookieAt = time.Now()
+	return hasCookieVal
+}
+
+// invalidateHasCookieCache 账号表发生增删 / 启停时调用，让下一次 hasCookie 重新查库。
+// 不挂这个钩子，admin 面板加号后最多 5 秒内模型列表还是旧的。
+func invalidateHasCookieCache() {
+	hasCookieMu.Lock()
+	hasCookieAt = time.Time{}
+	hasCookieMu.Unlock()
 }
 
 // modelNeedsLogin 判断一个模型是否必须登录态才真正生效。匿名请求这批会被服务端
@@ -202,6 +230,12 @@ func availableModels() map[string]ModelConfig {
 	if hasCookie() {
 		return Models
 	}
+	return anonModels()
+}
+
+// anonModels 是「无 cookie 时暴露的模型子集」。过滤只依赖包级的 Models 表，
+// 结果恒定，构建一次永久复用；此前每个无 cookie 请求都要重建一遍 map。
+var anonModels = sync.OnceValue(func() map[string]ModelConfig {
 	out := make(map[string]ModelConfig, len(Models))
 	for k, v := range Models {
 		if modelNeedsLogin(v) {
@@ -210,7 +244,7 @@ func availableModels() map[string]ModelConfig {
 		out[k] = v
 	}
 	return out
-}
+})
 
 // resolveModel maps a model name to its config.
 //
@@ -848,7 +882,11 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 		// says "empty" — but the job is already queued upstream. Retrying here generates
 		// one extra video per attempt (burning daily quota). Once a conversation id
 		// exists, treat it as accepted and let fetchMediaArtifacts poll hNvQHb.
-		if !hasContentFrame(string(raw)) && !videoAccepted(mc.Tool, string(raw)) {
+		// 已吐过内容（正文或思考链）本身就证明有内容帧，跳过 hasContentFrame 的
+		// 全文逐行重解析：它会对每行再做一轮 JSON 解析，长回复下是白烧的 CPU。
+		// 非流式路径（onDelta==nil）tracker 恒空，仍走完整检查。
+		if (tracker.emitted == "" && rtracker.emitted == "") &&
+			!hasContentFrame(string(raw)) && !videoAccepted(mc.Tool, string(raw)) {
 			lastErr = fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(raw))
 			if pickedOK {
 				// 记进代理健康度：1155 跟出口质量强相关（干净出口 60+ 次 0 发生，
@@ -868,12 +906,15 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 			recordProxyResult(picked.ID, true, "")
 		}
 		markCookieByStatus(cookieID, 200, "")
+		// string(raw) 是一次完整的响应体复制（大响应可达数百 KB），下面每个解析点
+		// 都要它——复制一次复用，不再各自 string(raw)。
+		rawStr := string(raw)
 		result := &StreamResult{
 			Emitted:          tracker.emitted,
 			EmittedReasoning: rtracker.emitted,
-			Raw:              string(raw),
-			Reasoning:        extractReasoning(string(raw)),
-			UpstreamModel:    extractUpstreamModel(string(raw)),
+			Raw:              rawStr,
+			Reasoning:        extractReasoning(rawStr),
+			UpstreamModel:    extractUpstreamModel(rawStr),
 			ProxyID:          picked.ID,
 			ProxyName:        picked.Name,
 			AccountID:        cookieID,
@@ -891,13 +932,13 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 			case toolVideo:
 				mime = "video/mp4"
 			}
-			cid, rid, _, _ := parseConvIDs(string(raw))
+			cid, rid, _, _ := parseConvIDs(rawStr)
 			if cid == "" {
-				cid = extractConversationID(string(raw))
+				cid = extractConversationID(rawStr)
 			}
 			result.ConvCID, result.ConvRID = cid, rid
 			arts, rcid, aerr := fetchMediaArtifacts(
-				mc.Tool, string(raw), cid, rid,
+				mc.Tool, rawStr, cid, rid,
 				cookieStr, sapisid, xsrfToken, proxyURL, mime, authUser)
 			result.ConvRCID = rcid
 			if aerr != nil {
@@ -914,7 +955,7 @@ func streamGenerateOnce(prompt, latest string, mc ModelConfig, pending []pending
 		// 临时对话（#34）生效时跳过：那条压根没进会话列表，删它是多发一次 RPC 删空气。
 		// 这正是临时对话比 create-then-delete 省的那一次出站请求。
 		if rtCfg().AutoDeleteConversation && !temporaryChatEligible() && cookieStr != "" && xsrfToken != "" {
-			if cid := extractConversationID(string(raw)); cid != "" {
+			if cid := extractConversationID(rawStr); cid != "" {
 				go deleteConversation(cid, cookieStr, sapisid, xsrfToken, proxyURL, authUser)
 			}
 		}
